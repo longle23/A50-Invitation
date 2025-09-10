@@ -2,6 +2,14 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const csv = require('csv-parser');
+require('dotenv').config();
+
+// Import MongoDB models
+const { connectDB } = require('./config/database');
+const Guest = require('./models/Guest');
+const Checkin = require('./models/Checkin');
+const RSVP = require('./models/RSVP');
+const EventSettings = require('./models/EventSettings');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,120 +20,226 @@ app.use(express.static('public'));
 app.use('/qrs', express.static('output/qrs'));
 app.use('/resources', express.static('resources'));
 
-// Lưu trữ dữ liệu check-in trong memory (trong thực tế nên dùng database)
-let checkinData = [];
+// Connect to MongoDB on startup
+connectDB().catch(console.error);
 
 /**
- * Đọc thông tin khách mời từ CSV
+ * Get guest information from MongoDB
  */
-function getGuestInfo(guestId) {
-    return new Promise((resolve, reject) => {
-        const guests = [];
-        fs.createReadStream('./resources/Guest_List_Cleaned.csv')
-            .pipe(csv())
-            .on('data', (row) => {
-                const code = (row['Code'] || '').toString().trim();
-                if (!code) return;
-                const guest = {
-                    id: code,
-                    name: (row['Full Name'] || '').toString().trim(),
-                    position: (row['Title / Position'] || '').toString().trim(),
-                    company: (row['Organization / Company'] || '').toString().trim(),
-                    salutation: (row['Salutation'] || '').toString().trim()
-                };
-                guests.push(guest);
-            })
-            .on('end', () => {
-                const normalizedId = (guestId || '').toString().trim();
-                const guest = guests.find(g => g.id === normalizedId);
-                resolve(guest || null);
-            })
-            .on('error', reject);
-    });
+async function getGuestInfo(guestId) {
+    try {
+        const guest = await Guest.findById(guestId);
+        return guest;
+    } catch (error) {
+        console.error('Error getting guest info:', error);
+        throw error;
+    }
 }
 
 /**
- * Lưu thông tin check-in
+ * Save check-in information to MongoDB
  */
-function saveCheckin(guestId, guestName) {
-    const checkinRecord = {
-        id: guestId,
-        name: guestName,
-        checkinTime: new Date().toISOString(),
-        timestamp: Date.now()
-    };
+async function saveCheckin(guestId, guestName) {
+    try {
+        // Check if already checked in
+        const existingCheckin = await Checkin.findByGuestId(guestId);
+        if (existingCheckin) {
+            return { success: false, message: 'Khách đã check-in rồi', data: existingCheckin };
+        }
+        
+        // Create new checkin record
+        const checkinRecord = new Checkin({
+            id: guestId,
+            name: guestName,
+            checkinTime: new Date().toISOString(),
+            timestamp: Date.now()
+        });
+        
+        await checkinRecord.save();
+        return { success: true, message: 'Check-in thành công', data: checkinRecord };
+    } catch (error) {
+        console.error('Error saving checkin:', error);
+        throw error;
+    }
+}
+
+/**
+ * Validate guest information completeness
+ */
+function validateGuestInfo(guest) {
+    const errors = [];
     
-    // Kiểm tra xem khách đã check-in chưa
-    const existingCheckin = checkinData.find(record => record.id === guestId);
-    if (existingCheckin) {
-        return { success: false, message: 'Khách đã check-in rồi', data: existingCheckin };
+    if (!guest.salutation || guest.salutation.trim() === '') {
+        errors.push('Danh xưng không được để trống');
     }
     
-    checkinData.push(checkinRecord);
-    return { success: true, message: 'Check-in thành công', data: checkinRecord };
+    if (!guest.name || guest.name.trim() === '') {
+        errors.push('Họ và tên không được để trống');
+    }
+    
+    if (!guest.position || guest.position.trim() === '') {
+        errors.push('Chức danh không được để trống');
+    }
+    
+    if (!guest.company || guest.company.trim() === '') {
+        errors.push('Tên công ty không được để trống');
+    }
+    
+    return {
+        isValid: errors.length === 0,
+        errors: errors
+    };
 }
 
 // Routes
 
 /**
- * Trang chủ - hiển thị thống kê
+ * Trang chủ - hiển thị thống kê và admin controls
  */
-app.get('/', (req, res) => {
-    const totalCheckedIn = checkinData.length;
-    const recentCheckins = checkinData
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, 10);
-    
-    res.send(`
-        <!DOCTYPE html>
-        <html lang="vi">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Hệ thống Check-in Sự kiện</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-                .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                h1 { color: #333; text-align: center; }
-                .stats { display: flex; justify-content: space-around; margin: 30px 0; }
-                .stat-box { background: #4CAF50; color: white; padding: 20px; border-radius: 8px; text-align: center; min-width: 150px; }
-                .stat-number { font-size: 2em; font-weight: bold; }
-                .recent-checkins { margin-top: 30px; }
-                .checkin-item { background: #f9f9f9; padding: 10px; margin: 5px 0; border-radius: 5px; border-left: 4px solid #4CAF50; }
-                .timestamp { color: #666; font-size: 0.9em; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🎉 Hệ thống Check-in Sự kiện</h1>
-                
-                <div class="stats">
-                    <div class="stat-box">
-                        <div class="stat-number">${totalCheckedIn}</div>
-                        <div>Đã Check-in</div>
+app.get('/', async (req, res) => {
+    try {
+        const totalCheckedIn = await Checkin.getCount();
+        const recentCheckins = await Checkin.getRecent(10);
+        const rsvpStats = await RSVP.getStats();
+        const eventSettings = await EventSettings.getSettings();
+        
+        res.send(`
+            <!DOCTYPE html>
+            <html lang="vi">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Hệ thống Check-in Sự kiện</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+                    .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                    h1 { color: #333; text-align: center; }
+                    .admin-section { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #007bff; }
+                    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }
+                    .stat-box { background: #4CAF50; color: white; padding: 20px; border-radius: 8px; text-align: center; }
+                    .stat-box.warning { background: #ff9800; }
+                    .stat-box.danger { background: #f44336; }
+                    .stat-box.info { background: #2196F3; }
+                    .stat-number { font-size: 2em; font-weight: bold; }
+                    .controls { display: flex; gap: 10px; margin: 20px 0; }
+                    .btn { padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+                    .btn-primary { background: #007bff; color: white; }
+                    .btn-success { background: #28a745; color: white; }
+                    .btn-danger { background: #dc3545; color: white; }
+                    .btn-warning { background: #ffc107; color: black; }
+                    .recent-checkins { margin-top: 30px; }
+                    .checkin-item { background: #f9f9f9; padding: 10px; margin: 5px 0; border-radius: 5px; border-left: 4px solid #4CAF50; }
+                    .timestamp { color: #666; font-size: 0.9em; }
+                    .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+                    .status-enabled { background: #28a745; }
+                    .status-disabled { background: #dc3545; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>🎉 Hệ thống Check-in Sự kiện</h1>
+                    
+                    <div class="admin-section">
+                        <h2>🔧 Quản lý sự kiện</h2>
+                        <div class="controls">
+                            <button class="btn ${eventSettings.checkinEnabled ? 'btn-danger' : 'btn-success'}" onclick="toggleCheckin()">
+                                ${eventSettings.checkinEnabled ? 'Tắt Check-in' : 'Bật Check-in'}
+                            </button>
+                            <button class="btn btn-primary" onclick="updateEventSettings()">
+                                Cập nhật thông tin sự kiện
+                            </button>
+                        </div>
+                        <p><span class="status-indicator ${eventSettings.checkinEnabled ? 'status-enabled' : 'status-disabled'}"></span>
+                        Check-in: ${eventSettings.checkinEnabled ? 'Đã bật' : 'Đã tắt'}</p>
+                    </div>
+                    
+                    <div class="stats">
+                        <div class="stat-box">
+                            <div class="stat-number">${totalCheckedIn}</div>
+                            <div>Đã Check-in</div>
+                        </div>
+                        <div class="stat-box info">
+                            <div class="stat-number">${rsvpStats.confirmed}</div>
+                            <div>Xác nhận tham dự</div>
+                        </div>
+                        <div class="stat-box warning">
+                            <div class="stat-number">${rsvpStats.pending}</div>
+                            <div>Chưa xác nhận</div>
+                        </div>
+                        <div class="stat-box danger">
+                            <div class="stat-number">${rsvpStats.declined}</div>
+                            <div>Từ chối tham dự</div>
+                        </div>
+                    </div>
+                    
+                    <div class="recent-checkins">
+                        <h2>📋 Khách mới check-in gần đây:</h2>
+                        ${recentCheckins.length > 0 ? 
+                            recentCheckins.map(checkin => `
+                                <div class="checkin-item">
+                                    <strong>${checkin.name}</strong>
+                                    <div class="timestamp">${new Date(checkin.checkinTime).toLocaleString('vi-VN')}</div>
+                                </div>
+                            `).join('') : 
+                            '<p>Chưa có khách nào check-in</p>'
+                        }
                     </div>
                 </div>
                 
-                <div class="recent-checkins">
-                    <h2>📋 Khách mới check-in gần đây:</h2>
-                    ${recentCheckins.length > 0 ? 
-                        recentCheckins.map(checkin => `
-                            <div class="checkin-item">
-                                <strong>${checkin.name}</strong>
-                                <div class="timestamp">${new Date(checkin.checkinTime).toLocaleString('vi-VN')}</div>
-                            </div>
-                        `).join('') : 
-                        '<p>Chưa có khách nào check-in</p>'
+                <script>
+                    async function toggleCheckin() {
+                        try {
+                            const response = await fetch('/api/admin/toggle-checkin', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' }
+                            });
+                            const result = await response.json();
+                            if (result.success) {
+                                location.reload();
+                            } else {
+                                alert('Lỗi: ' + result.message);
+                            }
+                        } catch (error) {
+                            alert('Có lỗi xảy ra: ' + error.message);
+                        }
                     }
-                </div>
-            </div>
-        </body>
-        </html>
-    `);
+                    
+                    async function updateEventSettings() {
+                        const eventDate = prompt('Ngày sự kiện (YYYY-MM-DD):', '${eventSettings.eventDate || ''}');
+                        const eventTime = prompt('Giờ sự kiện (HH:MM):', '${eventSettings.eventTime || ''}');
+                        const eventLocation = prompt('Địa điểm:', '${eventSettings.eventLocation || ''}');
+                        
+                        if (eventDate && eventTime && eventLocation) {
+                            try {
+                                const response = await fetch('/api/admin/event-settings', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ eventDate, eventTime, eventLocation })
+                                });
+                                const result = await response.json();
+                                if (result.success) {
+                                    alert('Cập nhật thành công!');
+                                    location.reload();
+                                } else {
+                                    alert('Lỗi: ' + result.message);
+                                }
+                            } catch (error) {
+                                alert('Có lỗi xảy ra: ' + error.message);
+                            }
+                        }
+                    }
+                </script>
+            </body>
+            </html>
+        `);
+    } catch (error) {
+        console.error('Error loading dashboard:', error);
+        res.status(500).send('Có lỗi xảy ra khi tải trang chủ');
+    }
 });
 
 /**
- * Trang check-in cá nhân hóa cho khách mời
+ * Trang check-in cá nhân hóa cho khách mời (với nút xác nhận đơn giản)
  */
 app.get('/checkin/:guestId', async (req, res) => {
     const { guestId } = req.params;
@@ -158,8 +272,13 @@ app.get('/checkin/:guestId', async (req, res) => {
             `);
         }
         
-        // Kiểm tra xem khách đã check-in chưa
-        const alreadyCheckedIn = checkinData.find(record => record.id === guestId);
+        // Check event settings
+        const eventSettings = await EventSettings.getSettings();
+        const rsvp = await RSVP.findByGuestId(guestId);
+        const alreadyCheckedIn = await Checkin.findByGuestId(guestId);
+        
+        // Validate guest information
+        const validation = validateGuestInfo(guest);
         
         res.send(`
             <!DOCTYPE html>
@@ -180,14 +299,26 @@ app.get('/checkin/:guestId', async (req, res) => {
                     .form-group { margin-bottom: 14px; }
                     label { display: block; font-weight: 600; margin-bottom: 6px; color: #333; }
                     input[type="text"], select { width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #d5d5e0; background: #fff; font-size: 14px; }
-                    .actions { display: flex; gap: 12px; margin-top: 16px; }
-                    .btn { flex: 1; padding: 12px 16px; border-radius: 10px; border: none; cursor: pointer; font-weight: 700; }
+                    .actions { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+                    .btn { flex: 1; padding: 12px 16px; border-radius: 10px; border: none; cursor: pointer; font-weight: 700; min-width: 120px; }
                     .btn-primary { background: #3e4d6b; color: #fff; }
                     .btn-secondary { background: #d7dbe7; color: #1f2a44; }
+                    .btn-success { background: #28a745; color: #fff; }
+                    .btn-warning { background: #ffc107; color: #000; }
+                    .btn-info { background: #17a2b8; color: #fff; }
                     .preview-frame { width: 100%; max-width: 520px; border-radius: 18px; background: #fff; padding: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.12); }
                     canvas { width: 100%; height: auto; display: block; border-radius: 12px; background: #000; }
-                    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
                     .note { font-size: 12px; color: #666; margin-top: 6px; }
+                    .alert { padding: 15px; border-radius: 8px; margin: 15px 0; }
+                    .alert-warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+                    .alert-danger { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+                    .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+                    .validation-errors { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; margin: 15px 0; }
+                    .validation-errors ul { margin: 0; padding-left: 20px; }
+                    .rsvp-status { padding: 10px; border-radius: 8px; margin: 10px 0; text-align: center; font-weight: bold; }
+                    .rsvp-confirmed { background: #d4edda; color: #155724; }
+                    .rsvp-pending { background: #fff3cd; color: #856404; }
+                    .rsvp-declined { background: #f8d7da; color: #721c24; }
                 </style>
             </head>
             <body>
@@ -196,6 +327,43 @@ app.get('/checkin/:guestId', async (req, res) => {
                         <div class="left">
                             <h1>SOTRANS GROUP</h1>
                             <div class="subtitle">Tạo Thiệp Mời Caravan 2025</div>
+                            
+                            ${!eventSettings.checkinEnabled ? `
+                                <div class="alert alert-warning">
+                                    <strong>⚠️ Check-in chưa được bật</strong><br>
+                                    Vui lòng liên hệ ban tổ chức để được hỗ trợ.
+                                </div>
+                            ` : ''}
+                            
+                            ${alreadyCheckedIn ? `
+                                <div class="alert alert-success">
+                                    <strong>✅ Bạn đã check-in thành công!</strong><br>
+                                    Thời gian: ${new Date(alreadyCheckedIn.checkinTime).toLocaleString('vi-VN')}
+                                </div>
+                            ` : ''}
+                            
+                            ${rsvp ? `
+                                <div class="rsvp-status rsvp-${rsvp.status}">
+                                    ${rsvp.status === 'confirmed' ? '✅ Đã xác nhận tham dự' : 
+                                      rsvp.status === 'declined' ? '❌ Từ chối tham dự' : 
+                                      '⏳ Chưa xác nhận tham dự'}
+                                </div>
+                            ` : `
+                                <div class="rsvp-status rsvp-pending">
+                                    ⏳ Chưa xác nhận tham dự
+                                </div>
+                            `}
+                            
+                            ${!validation.isValid ? `
+                                <div class="validation-errors">
+                                    <strong>⚠️ Thông tin chưa đầy đủ:</strong>
+                                    <ul>
+                                        ${validation.errors.map(error => `<li>${error}</li>`).join('')}
+                                    </ul>
+                                    <p>Vui lòng cập nhật thông tin trước khi check-in.</p>
+                                </div>
+                            ` : ''}
+                            
                             <div class="card">
                                 <div class="form-group">
                                     <label>1. Danh xưng:</label>
@@ -219,6 +387,12 @@ app.get('/checkin/:guestId', async (req, res) => {
                                 <div class="actions">
                                     <button id="btnDownload" class="btn btn-primary">Tải hình về máy</button>
                                     <button id="btnSave" class="btn btn-secondary">Lưu thông tin</button>
+                                    ${!rsvp || rsvp.status === 'pending' ? `
+                                        <button id="btnConfirm" class="btn btn-info">Xác nhận tham dự</button>
+                                    ` : ''}
+                                    ${eventSettings.checkinEnabled && validation.isValid && !alreadyCheckedIn ? `
+                                        <button id="btnCheckin" class="btn btn-success">Check In</button>
+                                    ` : ''}
                                 </div>
                                 <div class="note">Mã khách: <strong>${guest.id}</strong></div>
                             </div>
@@ -226,7 +400,7 @@ app.get('/checkin/:guestId', async (req, res) => {
                         <div class="right">
                             <div class="preview-frame">
                                 <canvas id="inviteCanvas" width="1080" height="1920"></canvas>
-                    </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -323,8 +497,48 @@ app.get('/checkin/:guestId', async (req, res) => {
                             const result = await res.json();
                             if (!result.success) throw new Error(result.message || 'Lưu thất bại');
                             alert('Đã lưu thông tin khách hàng.');
+                            location.reload();
                         } catch (e) {
                             alert('Lỗi lưu thông tin: ' + e.message);
+                        }
+                    });
+
+                    document.getElementById('btnConfirm')?.addEventListener('click', async () => {
+                        if (confirm('Bạn có chắc chắn muốn xác nhận tham dự sự kiện không?')) {
+                            try {
+                                const res = await fetch('/api/rsvp/${guest.id}', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ attendance: 'yes' })
+                                });
+                                const result = await res.json();
+                                if (result.success) {
+                                    alert('Xác nhận tham dự thành công!');
+                                    location.reload();
+                                } else {
+                                    alert('Lỗi: ' + result.message);
+                                }
+                            } catch (e) {
+                                alert('Lỗi xác nhận: ' + e.message);
+                            }
+                        }
+                    });
+
+                    document.getElementById('btnCheckin')?.addEventListener('click', async () => {
+                        try {
+                            const res = await fetch('/api/checkin/${guest.id}', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' }
+                            });
+                            const result = await res.json();
+                            if (result.success) {
+                                alert('Check-in thành công!');
+                                location.reload();
+                            } else {
+                                alert('Lỗi: ' + result.message);
+                            }
+                        } catch (e) {
+                            alert('Lỗi check-in: ' + e.message);
                         }
                     });
 
@@ -347,8 +561,16 @@ app.post('/api/checkin/:guestId', async (req, res) => {
     const { guestId } = req.params;
     
     try {
-        const guest = await getGuestInfo(guestId);
+        // Check if check-in is enabled
+        const eventSettings = await EventSettings.getSettings();
+        if (!eventSettings.checkinEnabled) {
+            return res.status(403).json({ 
+                success: false, 
+                message: 'Check-in chưa được bật' 
+            });
+        }
         
+        const guest = await getGuestInfo(guestId);
         if (!guest) {
             return res.status(404).json({ 
                 success: false, 
@@ -356,7 +578,17 @@ app.post('/api/checkin/:guestId', async (req, res) => {
             });
         }
         
-        const result = saveCheckin(guestId, guest.name);
+        // Validate guest information
+        const validation = validateGuestInfo(guest);
+        if (!validation.isValid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thông tin chưa đầy đủ',
+                errors: validation.errors
+            });
+        }
+        
+        const result = await saveCheckin(guestId, guest.name);
         res.json(result);
         
     } catch (error) {
@@ -383,93 +615,141 @@ app.get('/api/guest/:guestId', async (req, res) => {
 });
 
 /**
- * API: Cập nhật thông tin khách vào CSV
+ * API: Cập nhật thông tin khách vào MongoDB
  */
 app.post('/api/guest/:guestId', async (req, res) => {
     const { guestId } = req.params;
     const { salutation, name, position, company } = req.body || {};
-    const csvPath = path.join(__dirname, 'resources', 'Guest_List_Cleaned.csv');
+    
     try {
-        const fileContent = fs.readFileSync(csvPath, 'utf8');
-        const lines = fileContent.split(/\r?\n/);
-        if (lines.length === 0) throw new Error('CSV trống');
-        const headerLine = lines[0];
-        const headers = headerLine.split(',');
-
-        const rows = await new Promise((resolve, reject) => {
-            const result = [];
-            fs.createReadStream(csvPath)
-                .pipe(csv())
-                .on('data', (row) => result.push(row))
-                .on('end', () => resolve(result))
-                .on('error', reject);
+        const result = await Guest.updateById(guestId, {
+            salutation,
+            name,
+            position,
+            company
         });
-
-        let updated = false;
-        const updatedRows = rows.map((row) => {
-            const code = (row['Code'] || '').toString().trim();
-            if (code === guestId) {
-                updated = true;
-                return {
-                    ...row,
-                    'Salutation': salutation ?? row['Salutation'],
-                    'Full Name': name ?? row['Full Name'],
-                    'Title / Position': position ?? row['Title / Position'],
-                    'Organization / Company': company ?? row['Organization / Company']
-                };
-            }
-            return row;
-        });
-
-        if (!updated) return res.status(404).json({ success: false, message: 'Không tìm thấy khách mời' });
-
-        function toCsvValue(v) {
-            if (v == null) return '';
-            const s = String(v);
-            if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-                return '"' + s.replace(/"/g, '""') + '"';
-            }
-            return s;
+        
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy khách mời' });
         }
-
-        const headerOut = headers.join(',');
-        const body = updatedRows.map(row => headers.map(h => toCsvValue(row[h])).join(',')).join('\n');
-        const newContent = [headerOut, body].filter(Boolean).join('\n');
-        fs.writeFileSync(csvPath, newContent, 'utf8');
-
+        
         res.json({ success: true });
     } catch (e) {
-        console.error('Update CSV error:', e);
-        res.status(500).json({ success: false, message: 'Không thể lưu CSV' });
+        console.error('Update guest error:', e);
+        res.status(500).json({ success: false, message: 'Không thể lưu thông tin khách' });
+    }
+});
+
+/**
+ * API: RSVP confirmation (simplified)
+ */
+app.post('/api/rsvp/:guestId', async (req, res) => {
+    const { guestId } = req.params;
+    const { attendance } = req.body || {};
+    
+    try {
+        const guest = await getGuestInfo(guestId);
+        if (!guest) {
+            return res.status(404).json({ success: false, message: 'Không tìm thấy khách mời' });
+        }
+        
+        const status = attendance === 'yes' ? 'confirmed' : 'declined';
+        
+        const result = await RSVP.updateByGuestId(guestId, {
+            status,
+            attendance,
+            confirmedAt: new Date().toISOString()
+        });
+        
+        res.json({ success: true });
+    } catch (e) {
+        console.error('RSVP error:', e);
+        res.status(500).json({ success: false, message: 'Không thể lưu xác nhận' });
+    }
+});
+
+/**
+ * API: Admin - Toggle check-in
+ */
+app.post('/api/admin/toggle-checkin', async (req, res) => {
+    try {
+        const eventSettings = await EventSettings.getSettings();
+        eventSettings.checkinEnabled = !eventSettings.checkinEnabled;
+        await eventSettings.save();
+        
+        res.json({ success: true, checkinEnabled: eventSettings.checkinEnabled });
+    } catch (e) {
+        console.error('Toggle check-in error:', e);
+        res.status(500).json({ success: false, message: 'Không thể thay đổi trạng thái check-in' });
+    }
+});
+
+/**
+ * API: Admin - Update event settings
+ */
+app.post('/api/admin/event-settings', async (req, res) => {
+    const { eventDate, eventTime, eventLocation } = req.body || {};
+    
+    try {
+        await EventSettings.updateSettings({
+            eventDate,
+            eventTime,
+            eventLocation
+        });
+        
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Update event settings error:', e);
+        res.status(500).json({ success: false, message: 'Không thể cập nhật thông tin sự kiện' });
     }
 });
 
 /**
  * API endpoint để lấy danh sách check-in
  */
-app.get('/api/checkins', (req, res) => {
-    res.json({
-        total: checkinData.length,
-        checkins: checkinData.sort((a, b) => b.timestamp - a.timestamp)
-    });
+app.get('/api/checkins', async (req, res) => {
+    try {
+        const checkins = await Checkin.findAll();
+        res.json({
+            total: checkins.length,
+            checkins: checkins
+        });
+    } catch (error) {
+        console.error('Error getting checkins:', error);
+        res.status(500).json({ success: false, message: 'Lỗi khi lấy danh sách check-in' });
+    }
 });
 
 /**
  * API endpoint để xuất báo cáo check-in
  */
-app.get('/api/export', (req, res) => {
-    const csvData = checkinData.map(checkin => ({
-        id: checkin.id,
-        name: checkin.name,
-        checkinTime: checkin.checkinTime,
-        checkinDate: new Date(checkin.checkinTime).toLocaleDateString('vi-VN'),
-        checkinTimeOnly: new Date(checkin.checkinTime).toLocaleTimeString('vi-VN')
-    }));
-    
-    res.json({
-        total: checkinData.length,
-        data: csvData
-    });
+app.get('/api/export', async (req, res) => {
+    try {
+        const checkins = await Checkin.findAll();
+        const csvData = checkins.map(checkin => ({
+            id: checkin.id,
+            name: checkin.name,
+            checkinTime: checkin.checkinTime,
+            checkinDate: new Date(checkin.checkinTime).toLocaleDateString('vi-VN'),
+            checkinTimeOnly: new Date(checkin.checkinTime).toLocaleTimeString('vi-VN')
+        }));
+        
+        res.json({
+            total: checkins.length,
+            data: csvData
+        });
+    } catch (error) {
+        console.error('Error exporting data:', error);
+        res.status(500).json({ success: false, message: 'Lỗi khi xuất dữ liệu' });
+    }
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+    console.log('\n🛑 Shutting down gracefully...');
+    const { closeDB } = require('./config/database');
+    await closeDB();
+    process.exit(0);
 });
 
 // Khởi động server
@@ -477,6 +757,7 @@ app.listen(PORT, () => {
     console.log(`🚀 Server đang chạy tại: http://localhost:${PORT}`);
     console.log(`📋 Trang quản lý: http://localhost:${PORT}`);
     console.log(`📱 Check-in URL format: http://localhost:${PORT}/checkin/{guestId}`);
+    console.log(`🗄️ MongoDB connected: ${process.env.MONGODB_URI || 'mongodb://localhost:27017/qr-checkin-system'}`);
 });
 
 module.exports = app;
