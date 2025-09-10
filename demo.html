@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo QR Check-in System</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 40px; 
+            background: #f5f5f5; 
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 10px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+        }
+        h1 { color: #333; text-align: center; }
+        .demo-section { margin: 30px 0; padding: 20px; background: #f9f9f9; border-radius: 8px; }
+        .qr-example { text-align: center; margin: 20px 0; }
+        .qr-example img { max-width: 200px; border: 1px solid #ddd; }
+        .test-link { 
+            display: inline-block; 
+            background: #4CAF50; 
+            color: white; 
+            padding: 10px 20px; 
+            text-decoration: none; 
+            border-radius: 5px; 
+            margin: 5px; 
+        }
+        .test-link:hover { background: #45a049; }
+        .instructions { background: #e7f3ff; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .code-block { 
+            background: #f4f4f4; 
+            padding: 15px; 
+            border-radius: 5px; 
+            font-family: monospace; 
+            margin: 10px 0; 
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎉 Demo Hệ thống QR Check-in</h1>
+        
+        <div class="instructions">
+            <h2>📋 Hướng dẫn sử dụng:</h2>
+            <ol>
+                <li><strong>Khởi động server:</strong> <code>npm start</code></li>
+                <li><strong>Tạo QR codes:</strong> <code>npm run generate-qr</code></li>
+                <li><strong>Truy cập trang quản lý:</strong> <a href="http://localhost:3000" target="_blank">http://localhost:3000</a></li>
+                <li><strong>Test check-in:</strong> Click vào các link demo bên dưới</li>
+            </ol>
+        </div>
+
+        <div class="demo-section">
+            <h2>🔗 Test các trang check-in:</h2>
+            <p>Click vào các link sau để xem trang check-in cá nhân hóa:</p>
+            
+            <a href="http://localhost:3000/checkin/STH00002" class="test-link" target="_blank">
+                Test: Hà Văn Khôi (STH00002)
+            </a>
+            
+            <a href="http://localhost:3000/checkin/STH00008" class="test-link" target="_blank">
+                Test: Lê Hằng Nga (STH00008)
+            </a>
+            
+            <a href="http://localhost:3000/checkin/STH00017" class="test-link" target="_blank">
+                Test: Vũ Thành Đạt (STH00017)
+            </a>
+            
+            <a href="http://localhost:3000/checkin/STG0001" class="test-link" target="_blank">
+                Test: Trần Tuấn Anh (STG0001)
+            </a>
+            
+            <a href="http://localhost:3000/checkin/INVALID_ID" class="test-link" target="_blank">
+                Test: ID không tồn tại
+            </a>
+        </div>
+
+        <div class="demo-section">
+            <h2>📱 Ví dụ QR Code:</h2>
+            <div class="qr-example">
+                <p>QR Code cho khách mời sẽ trông như thế này:</p>
+                <img src="output/qrs/STH00002_Hà_Văn_Khôi.png" alt="QR Code Example">
+                <p><small>STH00002_Hà_Văn_Khôi.png</small></p>
+            </div>
+        </div>
+
+        <div class="demo-section">
+            <h2>🛠️ API Endpoints:</h2>
+            <div class="code-block">
+                <strong>GET /</strong> - Trang quản lý chính<br>
+                <strong>GET /checkin/:guestId</strong> - Trang check-in cá nhân hóa<br>
+                <strong>POST /api/checkin/:guestId</strong> - API check-in<br>
+                <strong>GET /api/checkins</strong> - Lấy danh sách check-in<br>
+                <strong>GET /api/export</strong> - Xuất báo cáo
+            </div>
+        </div>
+
+        <div class="demo-section">
+            <h2>📊 Tính năng chính:</h2>
+            <ul>
+                <li>✅ Tạo QR code tự động cho 521 khách mời</li>
+                <li>✅ Trang check-in cá nhân hóa với tên khách</li>
+                <li>✅ Chống check-in trùng lặp</li>
+                <li>✅ Dashboard theo dõi real-time</li>
+                <li>✅ API xuất báo cáo</li>
+                <li>✅ Giao diện responsive, thân thiện</li>
+            </ul>
+        </div>
+
+        <div class="demo-section">
+            <h2>📁 Cấu trúc file:</h2>
+            <div class="code-block">
+QRTesting03/
+├── guest-list.csv          # Danh sách 521 khách mời
+├── package.json            # Dependencies
+├── generateQR.js           # Script tạo QR codes
+├── index.js                # Web server chính
+├── demo.html               # File demo này
+├── output/
+│   └── qrs/               # 521 QR codes đã tạo
+│       ├── STH00002_Hà_Văn_Khôi.png
+│       ├── STH00008_Lê_Hằng_Nga.png
+│       └── ... (519 files khác)
+└── README.md
+            </div>
+        </div>
+
+        <div class="demo-section">
+            <h2>🚀 Cách triển khai:</h2>
+            <ol>
+                <li>In QR codes từ thư mục <code>output/qrs/</code></li>
+                <li>Phân phối cho khách mời</li>
+                <li>Khách quét QR → mở trang check-in</li>
+                <li>Nhấn "Check In" → hệ thống ghi nhận</li>
+                <li>Theo dõi tại <a href="http://localhost:3000" target="_blank">http://localhost:3000</a></li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>

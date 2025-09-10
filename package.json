@@ -1,0 +1,24 @@
+{
+  "name": "qr-checkin-system",
+  "version": "1.0.0",
+  "description": "Hệ thống tạo QR code và check-in cho khách mời sự kiện",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "generate-qr": "node generateQR.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "qrcode": "^1.5.3",
+    "csv-parser": "^3.0.0",
+    "path": "^0.12.7",
+    "fs": "^0.0.1-security"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["qr", "checkin", "event", "guest", "management"],
+  "author": "Your Name",
+  "license": "MIT"
+}
